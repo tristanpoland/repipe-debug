@@ -1,0 +1,842 @@
+# Debug: Input files: pipeline/base.yml pipeline/jobs/build-kit.yml pipeline/jobs/prepare.yml pipeline/jobs/ship-prerelease.yml pipeline/jobs/ship-release.yml pipeline/jobs/spec-check.yml pipeline/jobs/version-major.yml pipeline/jobs/version-minor.yml pipeline/jobs/version-patch.yml pipeline/resources/build.yml pipeline/resources/git-ci.yml pipeline/resources/git-latest-tag.yml pipeline/resources/git-main.yml pipeline/resources/git.yml pipeline/resources/github-prerelease.yml pipeline/resources/github.yml pipeline/resources/notify.yml pipeline/resources/release-cache.yml pipeline/resources/release-notes.yml pipeline/resources/spec-check.yml pipeline/resources/version.yml settings.yml
+# File: pipeline/base.yml
+groups:
+- jobs:
+  - build-kit
+  - spec-check
+  - ship-prerelease
+  - prepare
+  - ship-release
+  name: bosh-genesis-kit
+- jobs:
+  - major
+  - minor
+  - patch
+  name: versions
+# File: pipeline/base.yml
+jobs:
+- name: build-kit
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - in_parallel:
+      - get: version
+        # File: pipeline/jobs/build-kit.yml
+        params:
+          pre: rc
+      - get: git
+        trigger: true
+      - get: git-ci
+      - get: release-cache
+    - file: git-ci/ci/tasks/build-kit.yml
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        KIT_SHORTNAME: bosh
+        VAULT_TOKEN: ((vault.token))
+        VAULT_URI: ((vault.url))
+      task: build-kit
+    - params:
+        # File: pipeline/jobs/build-kit.yml
+        acl: public-read
+        # File: pipeline/jobs/build-kit.yml
+        file: build/*.tar.gz
+      put: build
+    - params:
+        file: version/number
+      put: version
+    - params:
+        # File: pipeline/jobs/build-kit.yml
+        acl: public-read
+        content-type: application/json
+        # File: pipeline/jobs/build-kit.yml
+        file: release-cache/release-lookup-cache.json
+      put: release-cache
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/build-kit.yml
+        message: prerelease build for '$BUILD_JOB_NAME' failed.
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_success:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/build-kit.yml
+        message: prerelease build for '$BUILD_JOB_NAME' succeeded.
+        ok: true
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+  # File: pipeline/jobs/build-kit.yml
+  serial: false
+- name: prepare
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - in_parallel:
+      - get: version
+        # File: pipeline/jobs/build-kit.yml
+        params:
+          bump: final
+        passed: []
+      - get: spec-check
+        passed: []
+      - get: git
+        passed: []
+        trigger: true
+      - get: git-ci
+      - get: git-latest-tag
+      - get: release-notes
+    - file: git-ci/ci/tasks/generate-release-notes.yml
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        GIT_EMAIL: ((github.email))
+        GIT_NAME: ((github.name))
+        KIT_SHORTNAME: bosh
+        RELEASE_NOTES_FILE: bosh-genesis-kit-release-notes.md
+        RELEASE_NOTES_WEB_URL: https://github.com/genesis-community/ci-release-notes/edit/main/bosh-genesis-kit-release-notes.md
+        VAULT_TOKEN: ((vault.token))
+        VAULT_URI: ((vault.url))
+      task: generate-release-notes
+    - params:
+        # File: pipeline/jobs/prepare.yml
+        rebase: true
+        # File: pipeline/jobs/prepare.yml
+        repository: release-notes
+      put: release-notes
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/prepare.yml
+        message: release candidate job 'pre' failed (which is unusual).
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+  # File: pipeline/jobs/prepare.yml
+  serial: true
+- name: ship-prerelease
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - in_parallel:
+      - get: build
+        passed:
+        - build-kit
+      - get: version
+        passed:
+        - build-kit
+      - get: git
+        passed:
+        - build-kit
+      - get: git-ci
+    - file: git-ci/ci/tasks/prerelease.yml
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        DEVELOP_BRANCH: develop
+        GIT_EMAIL: ((github.email))
+        GIT_NAME: ((github.name))
+        GITHUB_OWNER: genesis-community
+        KIT_SHORTNAME: bosh
+        # File: pipeline/jobs/ship-prerelease.yml
+        NOTIFICATION_OUT: notifications
+        # File: pipeline/jobs/ship-prerelease.yml
+        PRERELEASE: 1
+        RELEASE_BRANCH: develop
+        RELEASE_NOTES: bosh-genesis-kit-release-notes.md
+        # File: pipeline/jobs/ship-prerelease.yml
+        RELEASE_ROOT: gh
+      task: ship-prerelease
+    - params:
+        # File: pipeline/jobs/ship-prerelease.yml
+        body: gh/notes.md
+        # File: pipeline/jobs/ship-prerelease.yml
+        commitish: gh/commit
+        # File: pipeline/jobs/ship-prerelease.yml
+        globs:
+        - gh/artifacts/*
+        # File: pipeline/jobs/ship-prerelease.yml
+        name: gh/name
+        # File: pipeline/jobs/ship-prerelease.yml
+        tag: gh/tag
+      put: github-prerelease
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/ship-prerelease.yml
+        message: tests job '$BUILD_JOB_NAME' failed.
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+  # File: pipeline/jobs/build-kit.yml
+  serial: false
+- name: ship-release
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - in_parallel:
+      - get: version
+        # File: pipeline/jobs/build-kit.yml
+        params:
+          bump: final
+        passed:
+        - prepare
+        resource: version
+      - get: git
+        passed:
+        - prepare
+      - get: spec-check
+        passed:
+        - prepare
+        trigger: false
+      - get: release-notes
+      - get: release-cache
+      - get: git-ci
+      - get: git-main
+      - get: git-latest-tag
+    - file: git-ci/ci/tasks/build-kit.yml
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        KIT_SHORTNAME: bosh
+        VAULT_TOKEN: ((vault.token))
+        VAULT_URI: ((vault.url))
+      task: build-kit
+    - file: git-ci/ci/tasks/release.yml
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        DEVELOP_BRANCH: develop
+        GIT_EMAIL: ((github.email))
+        GIT_NAME: ((github.name))
+        GITHUB_OWNER: genesis-community
+        KIT_SHORTNAME: bosh
+        # File: pipeline/jobs/ship-prerelease.yml
+        NOTIFICATION_OUT: notifications
+        RELEASE_BRANCH: main
+        RELEASE_NOTES: bosh-genesis-kit-release-notes.md
+        # File: pipeline/jobs/ship-prerelease.yml
+        RELEASE_ROOT: gh
+      task: release
+    - params:
+        # File: pipeline/jobs/ship-release.yml
+        merge: false
+        # File: pipeline/jobs/ship-release.yml
+        repository: git-main
+        # File: pipeline/jobs/ship-prerelease.yml
+        tag: gh/tag
+      put: git-main
+    - params:
+        # File: pipeline/jobs/ship-prerelease.yml
+        body: gh/notes.md
+        # File: pipeline/jobs/ship-prerelease.yml
+        globs:
+        - gh/artifacts/*
+        # File: pipeline/jobs/ship-prerelease.yml
+        name: gh/name
+        # File: pipeline/jobs/ship-prerelease.yml
+        tag: gh/tag
+      put: github
+    - params:
+        # File: pipeline/jobs/ship-release.yml
+        bump: patch
+      put: version
+    - params:
+        # File: pipeline/jobs/ship-release.yml
+        file: notifications/message
+        link: git@github.com:genesis-community/bosh-genesis-kit/releases
+        # File: pipeline/jobs/ship-release.yml
+        method: announce
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/ship-release.yml
+        message: release job '$BUILD_JOB_NAME' failed.
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_success:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/ship-release.yml
+        message: release job '$BUILD_JOB_NAME' succeeded.
+        ok: true
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+  # File: pipeline/jobs/prepare.yml
+  serial: true
+- name: spec-check
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - in_parallel:
+      - get: build
+        passed:
+        - build-kit
+        trigger: true
+      - get: version
+        passed:
+        - build-kit
+      - get: git
+        passed:
+        - build-kit
+      - get: git-ci
+      - get: git-latest-tag
+    - file: git-ci/ci/tasks/spec-check.yml
+      task: spec-check
+    - params:
+        # File: pipeline/jobs/build-kit.yml
+        acl: public-read
+        # File: pipeline/jobs/spec-check.yml
+        file: spec-check/diff-*
+      put: spec-check
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/ship-prerelease.yml
+        message: tests job '$BUILD_JOB_NAME' failed.
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+  # File: pipeline/jobs/build-kit.yml
+  serial: false
+- name: major
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - get: version
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        bump: major
+      trigger: false
+    - params:
+        file: version/number
+      put: version
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-major.yml
+        message: major version bump job '$BUILD_JOB_NAME' failed (which is unusual).
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_success:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-major.yml
+        message: major version bump job '$BUILD_JOB_NAME' succeeded.
+        ok: true
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+- name: minor
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - get: version
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        bump: minor
+      trigger: false
+    - params:
+        file: version/number
+      put: version
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-minor.yml
+        message: minor version bump job '$BUILD_JOB_NAME' failed (which is unusual).
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_success:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-minor.yml
+        message: minor version bump job '$BUILD_JOB_NAME' succeeded.
+        ok: true
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+- name: patch
+  # File: pipeline/jobs/build-kit.yml
+  plan:
+  - do:
+    - get: version
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        # File: pipeline/jobs/ship-release.yml
+        bump: patch
+      trigger: false
+    - params:
+        file: version/number
+      put: version
+    # File: pipeline/jobs/build-kit.yml
+    on_failure:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-patch.yml
+        message: patch version bump job '$BUILD_JOB_NAME' failed (which is unusual).
+        ok: false
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+    # File: pipeline/jobs/build-kit.yml
+    on_success:
+      # File: pipeline/jobs/build-kit.yml
+      params:
+        link: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+        # File: pipeline/jobs/version-patch.yml
+        message: patch version bump job '$BUILD_JOB_NAME' succeeded.
+        ok: true
+        topic: bosh-genesis-kit-pipeline-$BUILD_JOB_NAME
+      # File: pipeline/jobs/build-kit.yml
+      put: notify
+  # File: pipeline/jobs/build-kit.yml
+  public: true
+# File: pipeline/base.yml
+meta:
+  # File: pipeline/base.yml
+  aws:
+    # File: settings.yml
+    access_key: ((cloudfoundry-community-aws.access_key_id))
+    # File: pipeline/base.yml
+    bucket: genesis-pipeline
+    # File: pipeline/base.yml
+    region_name: us-east-1
+    # File: settings.yml
+    secret_key: ((cloudfoundry-community-aws.secret_access_key))
+  # File: settings.yml
+  bats:
+    # File: settings.yml
+    dns_host: 10.4.9.32
+    # File: settings.yml
+    env: https://10.4.9.32:25555
+    # File: settings.yml
+    stemcell: bosh-vsphere-kvm-ubuntu-jammy-go_agent
+  # File: pipeline/base.yml
+  blocking_tests: []
+  # File: settings.yml
+  exposed: false
+  # File: pipeline/base.yml
+  git:
+    # File: pipeline/base.yml
+    email: ((github.email))
+    # File: pipeline/base.yml
+    name: ((github.name))
+  # File: pipeline/base.yml
+  github:
+    # File: settings.yml
+    access_token: ((github.access_token))
+    # File: settings.yml
+    branch: develop
+    main-branch: main
+    # File: settings.yml
+    owner: genesis-community
+    # File: settings.yml
+    private_key: ((github.private_key))
+    # File: pipeline/base.yml
+    release_notes:
+      branch: main
+      edit: https://github.com/genesis-community/ci-release-notes/edit/main/bosh-genesis-kit-release-notes.md
+      file: bosh-genesis-kit-release-notes.md
+      repo: ci-release-notes
+      uri: git@github.com:genesis-community/ci-release-notes
+    # File: settings.yml
+    repo: bosh-genesis-kit
+    uri: git@github.com:genesis-community/bosh-genesis-kit
+  # File: settings.yml
+  iaas: vsphere
+  # File: pipeline/base.yml
+  image:
+    # File: pipeline/base.yml
+    name: ((image/genesis.url))
+    # File: pipeline/base.yml
+    tag: ((image/genesis.tag))
+  # File: settings.yml
+  initial_version: 3.0.0-rc.1
+  # File: settings.yml
+  kit: bosh
+  name: bosh-genesis-kit
+  pipeline: bosh-genesis-kit
+  # File: settings.yml
+  release: BOSH Genesis Kit
+  # File: pipeline/base.yml
+  shout:
+    # File: pipeline/base.yml
+    links:
+      build: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+      pipeline: https://pipes.scalecf.net/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME
+    # File: pipeline/base.yml
+    metadata:
+      build-job-name: $BUILD_JOB_NAME
+      build-pipeline-name: $BUILD_PIPELINE_NAME
+      build-team-name: $BUILD_TEAM_NAME
+    # File: settings.yml
+    password: ((shout.password))
+    topic: bosh-genesis-kit-pipeline
+    # File: settings.yml
+    url: ((shout.url))
+    # File: settings.yml
+    username: ((shout.username))
+  # File: settings.yml
+  target: pipes/genesis
+  # File: pipeline/base.yml
+  task_connectivity_params:
+    # File: settings.yml
+    GENESIS_HONOR_ENV: 1
+    GIT_EMAIL: ((github.email))
+    GIT_NAME: ((github.name))
+    INFRASTRUCTURE: vsphere
+    VAULT_TOKEN: ((vault.token))
+    VAULT_URI: ((vault.url))
+  # File: pipeline/base.yml
+  upstream:
+    # File: settings.yml
+    bosh_releases:
+    - name: bosh
+      # File: settings.yml
+      repository: cloudfoundry/bosh
+      # File: settings.yml
+      watch: false
+    - name: bpm
+      # File: settings.yml
+      repository: cloudfoundry/bpm-release
+      # File: settings.yml
+      watch: false
+    - name: credhub
+      # File: settings.yml
+      repository: pivotal/credhub-release
+      tag_prefix: ""
+      # File: settings.yml
+      watch: false
+    - name: node-exporter
+      # File: settings.yml
+      repository: bosh-prometheus/node-exporter-boshrelease
+    - name: uaa
+      # File: settings.yml
+      repository: cloudfoundry/uaa-release
+      # File: settings.yml
+      watch: false
+    - name: garden-runc
+      # File: settings.yml
+      repository: cloudfoundry/garden-runc-release
+      # File: settings.yml
+      watch: false
+    - name: port-forwarding
+      # File: settings.yml
+      repository: cloudfoundry-community/port-forwarding-boshrelease
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-aws-cpi
+      # File: settings.yml
+      repository: cloudfoundry/bosh-aws-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-azure-cpi
+      # File: settings.yml
+      repository: cloudfoundry/bosh-azure-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-google-cpi
+      # File: settings.yml
+      repository: cloudfoundry/bosh-google-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-openstack-cpi
+      # File: settings.yml
+      repository: cloudfoundry/bosh-openstack-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-vsphere-cpi
+      # File: settings.yml
+      repository: cloudfoundry/bosh-vsphere-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: iaas
+      name: bosh-warden-cpi
+      # File: settings.yml
+      repository: cppforlife/bosh-warden-cpi-release
+      # File: settings.yml
+      watch: false
+    - category: support
+      name: os-conf
+      # File: settings.yml
+      repository: cloudfoundry/os-conf-release
+    - category: support
+      name: toolbelt
+      # File: settings.yml
+      repository: cloudfoundry-community/toolbelt-boshrelease
+    - category: support
+      name: vault-credhub-proxy
+      # File: settings.yml
+      repository: cloudfoundry-community/vault-credhub-proxy-boshrelease
+      # File: pipeline/resources/github-prerelease.yml
+      type: github-release
+    # File: settings.yml
+    categories:
+    - default: true
+      # File: settings.yml
+      label: BOSH Director Components
+      name: core
+    - label: Cloud Infrastructure Interfaces
+      name: iaas
+    - label: Add-ons and Support Tools
+      name: support
+    # File: settings.yml
+    default_releases_path: overlay/releases
+    # File: pipeline/base.yml
+    manifest:
+      # File: pipeline/base.yml
+      branch: master
+      # File: pipeline/base.yml
+      org: cloudfoundry
+      # File: settings.yml
+      package: bosh-deployment
+      path: bosh-deployment
+      repo: cloudfoundry/bosh-deployment
+      url: https://github.com/cloudfoundry/bosh-deployment.git
+  # File: settings.yml
+  url: https://pipes.scalecf.net
+  # File: pipeline/base.yml
+  vault:
+    # File: settings.yml
+    token: ((vault.token))
+    # File: settings.yml
+    url: ((vault.url))
+# File: pipeline/resources/notify.yml
+resource_types:
+- name: shout-notification
+  # File: pipeline/resources/build.yml
+  source:
+    # File: pipeline/resources/notify.yml
+    repository: huntprod/shout-resource
+  # File: pipeline/resources/notify.yml
+  type: docker-image
+# File: pipeline/resources/build.yml
+resources:
+- name: build
+  # File: pipeline/resources/build.yml
+  source:
+    access_key_id: ((cloudfoundry-community-aws.access_key_id))
+    # File: pipeline/base.yml
+    bucket: genesis-pipeline
+    endpoint: null
+    regexp: bosh-genesis-kit/build/(.*).tar.gz
+    # File: pipeline/base.yml
+    region_name: us-east-1
+    secret_access_key: ((cloudfoundry-community-aws.secret_access_key))
+    skip_ssl_verification: false
+  # File: pipeline/resources/build.yml
+  type: s3
+- check_every: 1h
+  name: git-ci
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    branch: develop
+    # File: pipeline/resources/git-ci.yml
+    disable_ci_skip: true
+    # File: pipeline/resources/git-ci.yml
+    paths:
+    - ci/*
+    # File: settings.yml
+    private_key: ((github.private_key))
+    uri: git@github.com:genesis-community/bosh-genesis-kit
+  # File: pipeline/resources/git-ci.yml
+  type: git
+- check_every: 1h
+  name: git-latest-tag
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    branch: develop
+    # File: pipeline/resources/git-ci.yml
+    disable_ci_skip: true
+    # File: settings.yml
+    private_key: ((github.private_key))
+    tag_regex: ^v[0-9\.]*$
+    uri: git@github.com:genesis-community/bosh-genesis-kit
+  # File: pipeline/resources/git-ci.yml
+  type: git
+- check_every: 1h
+  name: git-main
+  # File: pipeline/resources/build.yml
+  source:
+    branch: main
+    # File: settings.yml
+    private_key: ((github.private_key))
+    uri: git@github.com:genesis-community/bosh-genesis-kit
+  # File: pipeline/resources/git-ci.yml
+  type: git
+- check_every: 1h
+  name: git
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    branch: develop
+    # File: pipeline/resources/git.yml
+    commit_filter:
+      # File: pipeline/resources/git.yml
+      exclude:
+      - ^\[ci\] release v
+      - '^WIP:'
+    # File: pipeline/resources/git.yml
+    ignore_paths:
+    - ci
+    # File: settings.yml
+    private_key: ((github.private_key))
+    uri: git@github.com:genesis-community/bosh-genesis-kit
+  # File: pipeline/resources/git-ci.yml
+  type: git
+- name: github-prerelease
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    access_token: ((github.access_token))
+    # File: settings.yml
+    owner: genesis-community
+    # File: pipeline/resources/github-prerelease.yml
+    pre_release: true
+    # File: pipeline/resources/github-prerelease.yml
+    release: false
+    repository: bosh-genesis-kit
+  # File: pipeline/resources/github-prerelease.yml
+  type: github-release
+- name: github
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    access_token: ((github.access_token))
+    # File: settings.yml
+    owner: genesis-community
+    repository: bosh-genesis-kit
+  # File: pipeline/resources/github-prerelease.yml
+  type: github-release
+- name: notify
+  # File: pipeline/resources/build.yml
+  source:
+    # File: settings.yml
+    password: ((shout.password))
+    topic: bosh-genesis-kit-pipeline
+    # File: settings.yml
+    url: ((shout.url))
+    # File: settings.yml
+    username: ((shout.username))
+  # File: pipeline/resources/notify.yml
+  type: shout-notification
+- name: release-cache
+  # File: pipeline/resources/build.yml
+  source:
+    access_key_id: ((cloudfoundry-community-aws.access_key_id))
+    # File: pipeline/base.yml
+    bucket: genesis-pipeline
+    # File: pipeline/resources/release-cache.yml
+    driver: s3
+    endpoint: null
+    initial_version: EfKas_zbhzhLrSyrWLz753zC5RyyambH
+    # File: pipeline/base.yml
+    region_name: us-east-1
+    secret_access_key: ((cloudfoundry-community-aws.secret_access_key))
+    skip_ssl_verification: false
+    versioned_file: release-lookup-cache.json
+  # File: pipeline/resources/build.yml
+  type: s3
+- check_every: 1h
+  name: release-notes
+  # File: pipeline/resources/build.yml
+  source:
+    branch: main
+    # File: pipeline/resources/git-ci.yml
+    disable_ci_skip: true
+    # File: pipeline/resources/git-ci.yml
+    paths:
+    - bosh-genesis-kit-release-notes.md
+    # File: settings.yml
+    private_key: ((github.private_key))
+    uri: git@github.com:genesis-community/ci-release-notes
+  # File: pipeline/resources/git-ci.yml
+  type: git
+- name: spec-check
+  # File: pipeline/resources/build.yml
+  source:
+    access_key_id: ((cloudfoundry-community-aws.access_key_id))
+    # File: pipeline/base.yml
+    bucket: genesis-pipeline
+    endpoint: null
+    regexp: bosh-genesis-kit/spec-check/diff-(.*)
+    # File: pipeline/base.yml
+    region_name: us-east-1
+    secret_access_key: ((cloudfoundry-community-aws.secret_access_key))
+    skip_ssl_verification: false
+  # File: pipeline/resources/build.yml
+  type: s3
+- name: version
+  # File: pipeline/resources/build.yml
+  source:
+    access_key_id: ((cloudfoundry-community-aws.access_key_id))
+    # File: pipeline/base.yml
+    bucket: genesis-pipeline
+    # File: pipeline/resources/release-cache.yml
+    driver: s3
+    endpoint: null
+    # File: settings.yml
+    initial_version: 3.0.0-rc.1
+    key: bosh-genesis-kit/version
+    # File: pipeline/base.yml
+    region_name: us-east-1
+    secret_access_key: ((cloudfoundry-community-aws.secret_access_key))
+    skip_ssl_verification: false
+  # File: pipeline/resources/version.yml
+  type: semver
+
