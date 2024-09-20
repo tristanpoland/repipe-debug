@@ -3,7 +3,7 @@
 # spruce-merge-diff-file-blame
 #
 # Script for merging YAML files using Spruce, resolving dynamic placeholders,
-# and tracking file-level blame.
+# and tracking file-level blame based on YAML hierarchy.
 
 set -ue
 
@@ -46,7 +46,41 @@ resolve_placeholders() {
     echo "$resolved_line"
 }
 
-# Function to merge YAML files using Spruce and track blame
+# Function to find the correct line number based on YAML hierarchy
+find_hierarchical_line_number() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    local current_indent=0
+    local line_number=0
+    local found_key=false
+    local found_line=""
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        ((line_number++))
+        if [[ "$line" =~ ^([[:space:]]*)(.+)$ ]]; then
+            local indent_level=${#BASH_REMATCH[1]}
+            local content="${BASH_REMATCH[2]}"
+
+            if [[ $indent_level -le $current_indent ]]; then
+                found_key=false
+            fi
+
+            if [[ "$content" == "$key:"* ]]; then
+                found_key=true
+                current_indent=$indent_level
+                found_line=$line_number
+            elif $found_key && [[ "$content" == *"$value"* ]]; then
+                echo "$found_line"
+                return 0
+            fi
+        fi
+    done < "$file"
+
+    echo "$found_line"
+}
+
+# Function to merge YAML files using Spruce and track blame with hierarchical approach
 spruce_merge_with_blame() {
     local output_file="$1"
     shift
@@ -83,10 +117,13 @@ spruce_merge_with_blame() {
                     found=false
                     for file in "${files[@]}"; do
                         if grep -q "^[[:space:]]*${escaped_key}:[[:space:]]*${escaped_value}" "$file"; then
-                            echo "${indent}# File: $file"
-                            echo "$resolved_line"
-                            found=true
-                            break
+                            line_number=$(find_hierarchical_line_number "$file" "$key" "$value")
+                            if [[ -n "$line_number" ]]; then
+                                echo "${indent}# File: $file (Line: $line_number)"
+                                echo "$resolved_line"
+                                found=true
+                                break
+                            fi
                         fi
                     done
                     if ! $found; then
